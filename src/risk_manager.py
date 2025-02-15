@@ -1,3 +1,5 @@
+import pandas as pd
+
 class RiskManager:
     def __init__(self, config):
         self.config = config

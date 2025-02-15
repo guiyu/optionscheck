@@ -1,5 +1,14 @@
 # config/config.yaml
 data_sources:
+  alpha_vantage:
+    api_endpoint: "https://www.alphavantage.co/query"
+    functions:
+      earnings_calendar: "EARNINGS_CALENDAR"
+      intraday: "TIME_SERIES_INTRADAY"
+    settings:
+      earnings_horizon: "3month"
+      default_interval: "5min"
+
   yahoo_finance:
     api_endpoint: "https://query1.finance.yahoo.com/v8/finance/chart/"
     option_chain_url: "https://query2.finance.yahoo.com/v7/finance/options/"
@@ -14,4 +23,4 @@ strategy:
   max_spread_ratio: 0.1
   polling_interval: 15  # minutes
 
-watchlist: ["QQQ", "SPY", "NVDA", "TSLA"]
+watchlist: ["QQQ", "SPY", "NVDA", "TSLA", "ASML"]
