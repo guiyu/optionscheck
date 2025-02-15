@@ -1,0 +1,17 @@
+# config/config.yaml
+data_sources:
+  yahoo_finance:
+    api_endpoint: "https://query1.finance.yahoo.com/v8/finance/chart/"
+    option_chain_url: "https://query2.finance.yahoo.com/v7/finance/options/"
+    
+  earnings_whisper:
+    api_endpoint: "https://www.earningswhispers.com/api/v2/calendars"
+    
+strategy:
+  iv_percentile_threshold: 0.7
+  max_vega: 0.2
+  min_volume: 100
+  max_spread_ratio: 0.1
+  polling_interval: 15  # minutes
+
+watchlist: ["QQQ", "SPY", "NVDA", "TSLA"]

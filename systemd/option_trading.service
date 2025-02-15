@@ -1,0 +1,14 @@
+[Unit]
+Description=Option Trading Daemon
+After=network.target
+
+[Service]
+User=ubuntu
+WorkingDirectory=/path/to/option_trading_system
+ExecStart=/usr/bin/python3 src/daemon.py
+EnvironmentFile=/path/to/option_trading_system/.env
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
