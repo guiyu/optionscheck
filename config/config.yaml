@@ -17,10 +17,10 @@ data_sources:
     api_endpoint: "https://www.earningswhispers.com/api/v2/calendars"
     
 strategy:
-  iv_percentile_threshold: 0.7
-  max_vega: 0.2
-  min_volume: 100
-  max_spread_ratio: 0.1
+  iv_percentile_threshold: 60  # IV rank阈值
+  min_volume: 100  # 最小成交量
+  max_spread_ratio: 0.1  # 最大价差比例
+  max_vega: 0.5  # 最大Vega敞口
   polling_interval: 15  # minutes
 
 watchlist: ["QQQ", "SPY", "NVDA", "TSLA", "ASML"]

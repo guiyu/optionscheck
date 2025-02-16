@@ -83,10 +83,17 @@ class DataLoader:
                 exp_chains = chains[chains.index.get_level_values('expiration') == expiration]
                 
                 # 分离看涨和看跌期权
-                calls = exp_chains[exp_chains['optionType'] == 'calls'].assign(type='call')
-                puts = exp_chains[exp_chains['optionType'] == 'puts'].assign(type='put')
+                # 检查数据结构
+                print("\n数据结构信息:")
+                print(f"列名: {exp_chains.columns.tolist()}")
+                print(f"索引: {exp_chains.index.names}")
+                print(f"样本数据:\n{exp_chains.head(1)}")
                 
-                print(f"期权数据获取成功:")
+                # 根据索引级别分离看涨和看跌期权
+                calls = exp_chains.xs('calls', level='optionType').assign(type='call')
+                puts = exp_chains.xs('puts', level='optionType').assign(type='put')
+                
+                print(f"\n期权数据获取成功:")
                 print(f"看涨期权数量: {len(calls)}")
                 print(f"看跌期权数量: {len(puts)}")
                 
@@ -138,6 +145,9 @@ class DataLoader:
                 
             except Exception as e:
                 print(f"处理期权数据失败: {str(e)}")
+                print(f"错误类型: {type(e)}")
+                import traceback
+                print(f"错误堆栈:\n{traceback.format_exc()}")
                 return pd.DataFrame()
                 
         except Exception as e:
@@ -150,21 +160,24 @@ class DataLoader:
     def get_earnings_dates(self):
         """获取财报日历"""
         try:
-            # 使用yahooquery获取财报信息
-            earnings = self.yahoo.earnings_history
-            if isinstance(earnings, dict) or earnings.empty:
-                return []
-            
-            # 获取未来的财报日期
-            future_dates = earnings[
-                earnings['startdatetime'] > pd.Timestamp.now()
-            ]['startdatetime']
-            
-            return [d.to_pydatetime() for d in future_dates]
-            
-        except Exception as e:
-            print(f"财报日历获取失败: {str(e)}")
             # ETF没有财报日期
             if 'QQQ' in self.ticker or 'SPY' in self.ticker:
                 return []
+                
+            # 使用yahooquery获取财报信息
+            calendar = self.yahoo.calendar_events
+            if isinstance(calendar, dict) or calendar.empty:
+                return []
+            
+            # 获取未来的财报日期
+            if 'Earnings Date' in calendar.columns:
+                future_dates = calendar[
+                    calendar['Earnings Date'] > pd.Timestamp.now()
+                ]['Earnings Date']
+                return [d.to_pydatetime() for d in future_dates]
+            
+            return []
+            
+        except Exception as e:
+            print(f"财报日历获取失败: {str(e)}")
             return []

@@ -54,27 +54,53 @@ class SignalGenerator:
         call_contract = option_chain[
             (option_chain['strike'] == call_strike) &
             (option_chain['type'] == 'call')
-        ]
+        ].iloc[0]
         
         put_contract = option_chain[
             (option_chain['strike'] == put_strike) &
             (option_chain['type'] == 'put')
-        ]
+        ].iloc[0]
         
         if call_contract.empty or put_contract.empty:
             print("无法获取合约信息")
             return None
+            
+        # 计算组合希腊字母
+        call_greeks = calculate_greeks(
+            'call', 
+            call_strike, 
+            self.spot_price,
+            call_contract['days_to_expire'],
+            call_contract['impliedVolatility']
+        )
+        
+        put_greeks = calculate_greeks(
+            'put',
+            put_strike,
+            self.spot_price,
+            put_contract['days_to_expire'],
+            put_contract['impliedVolatility']
+        )
+        
+        # 合并希腊字母
+        portfolio_greeks = {
+            'delta': call_greeks['delta'] - put_greeks['delta'],
+            'gamma': call_greeks['gamma'] - put_greeks['gamma'],
+            'vega': call_greeks['vega'] - put_greeks['vega'],
+            'theta': call_greeks['theta'] - put_greeks['theta']
+        }
             
         # 计算概率
         prob = self._calculate_probability(call_strike)
         
         return {
             'ticker': self.dl.ticker,
-            'strategy': 'BullCallSpread',
+            'strategy_type': 'bull_call_spread',
             'strikes': (call_strike, put_strike),
-            'probability': round(prob, 2),
+            'probability': round(prob * 100, 2),
             'entry_price': self.spot_price,
-            'expiration': call_contract['expiration'].iloc[0]
+            'expiration': call_contract['expiration'],
+            'greeks': portfolio_greeks  # 添加希腊字母数据
         }
     
     def _has_earnings_risk(self, dates):
