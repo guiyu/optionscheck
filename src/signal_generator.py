@@ -4,6 +4,10 @@ from src.data_loader import DataLoader
 import pandas as pd
 import numpy as np
 from scipy.stats import norm
+import os
+import logging
+
+logger = logging.getLogger(__name__)
 
 class SignalGenerator:
     def __init__(self, data_loader):
@@ -43,64 +47,74 @@ class SignalGenerator:
             return None
             
         # 选择行权价
-        call_strike = self._select_strike_by_delta('call', 0.3)
-        put_strike = self._select_strike_by_delta('put', -0.3)
+        long_strike = self._select_strike_by_delta('call', 0.3)  # 买入期权
+        short_strike = self._select_strike_by_delta('call', 0.2)  # 卖出期权
         
-        if call_strike is None or put_strike is None:
+        if long_strike is None or short_strike is None:
             print("无法选择合适的行权价")
             return None
+            
+        # 确保牛市价差的正确顺序：买入低行权价，卖出高行权价
+        if long_strike > short_strike:
+            long_strike, short_strike = short_strike, long_strike
         
         # 获取合约信息
-        call_contract = option_chain[
-            (option_chain['strike'] == call_strike) &
+        long_contract = option_chain[
+            (option_chain['strike'] == long_strike) &
             (option_chain['type'] == 'call')
         ].iloc[0]
         
-        put_contract = option_chain[
-            (option_chain['strike'] == put_strike) &
-            (option_chain['type'] == 'put')
+        short_contract = option_chain[
+            (option_chain['strike'] == short_strike) &
+            (option_chain['type'] == 'call')
         ].iloc[0]
         
-        if call_contract.empty or put_contract.empty:
+        if long_contract.empty or short_contract.empty:
             print("无法获取合约信息")
             return None
             
         # 计算组合希腊字母
-        call_greeks = calculate_greeks(
+        long_greeks = calculate_greeks(
             'call', 
-            call_strike, 
+            long_strike, 
             self.spot_price,
-            call_contract['days_to_expire'],
-            call_contract['impliedVolatility']
+            long_contract['days_to_expire'],
+            long_contract['impliedVolatility']
         )
         
-        put_greeks = calculate_greeks(
-            'put',
-            put_strike,
+        short_greeks = calculate_greeks(
+            'call',
+            short_strike,
             self.spot_price,
-            put_contract['days_to_expire'],
-            put_contract['impliedVolatility']
+            short_contract['days_to_expire'],
+            short_contract['impliedVolatility']
         )
         
         # 合并希腊字母
         portfolio_greeks = {
-            'delta': call_greeks['delta'] - put_greeks['delta'],
-            'gamma': call_greeks['gamma'] - put_greeks['gamma'],
-            'vega': call_greeks['vega'] - put_greeks['vega'],
-            'theta': call_greeks['theta'] - put_greeks['theta']
+            'delta': long_greeks['delta'] - short_greeks['delta'],
+            'gamma': long_greeks['gamma'] - short_greeks['gamma'],
+            'vega': long_greeks['vega'] - short_greeks['vega'],
+            'theta': long_greeks['theta'] - short_greeks['theta']
         }
             
-        # 计算概率
-        prob = self._calculate_probability(call_strike)
+        # 计算胜率
+        prob = self._calculate_probability(long_strike, short_strike)
+        
+        # 只有当胜率超过阈值时才返回信号
+        min_probability = float(os.getenv('STRATEGY_MIN_PROBABILITY', 60))
+        if prob < min_probability:
+            logger.debug(f"胜率 {prob:.2f}% 低于最小要求 {min_probability}%")
+            return None
         
         return {
             'ticker': self.dl.ticker,
             'strategy_type': 'bull_call_spread',
-            'strikes': (call_strike, put_strike),
-            'probability': round(prob * 100, 2),
+            'strikes': (long_strike, short_strike),  # 正确的顺序：(低行权价, 高行权价)
+            'probability': round(prob, 2),
             'entry_price': self.spot_price,
-            'expiration': call_contract['expiration'],
-            'greeks': portfolio_greeks  # 添加希腊字母数据
+            'expiration': long_contract['expiration'],
+            'greeks': portfolio_greeks
         }
     
     def _has_earnings_risk(self, dates):
@@ -120,31 +134,55 @@ class SignalGenerator:
         # 计算Delta值
         deltas = []
         for _, row in chain.iterrows():
+            # 确保天数大于0
+            days = max(1, row['days_to_expire'])
+            # 确保波动率大于0
+            iv = max(0.0001, row['impliedVolatility'])
+            
             g = calculate_greeks(
                 option_type=row['type'],
                 strike=row['strike'],
                 spot=self.spot_price,
-                t=row['days_to_expire'],
-                iv=row['impliedVolatility']
+                t=days,
+                iv=iv
             )
             deltas.append(g['delta'])
         
         # 找到最接近目标Delta的行权价
         chain = chain.assign(delta=deltas)
-        closest_idx = np.abs(chain['delta'] - target_delta).argmin()
-        return chain.iloc[closest_idx]['strike']
+        # 过滤掉无效的Delta值
+        valid_chain = chain[chain['delta'] != 0]
+        if valid_chain.empty:
+            return None
+            
+        closest_idx = np.abs(valid_chain['delta'] - target_delta).argmin()
+        return valid_chain.iloc[closest_idx]['strike']
     
-    def _calculate_probability(self, strike):
-        """计算触及概率"""
-        df = self.dl.get_real_time_data()  # 获取数据
+    def _calculate_probability(self, long_strike, short_strike):
+        """计算牛市价差的获利概率"""
+        df = self.dl.get_real_time_data()
         if df.empty:
             return 0
             
+        # 计算历史波动率
         log_returns = np.log(df['Close']/df['Close'].shift(1)).dropna()
-        mu = log_returns.mean() * 252
         sigma = log_returns.std() * np.sqrt(252)
         
+        # 使用30天作为目标期限
         t = 30/365
-        d2 = (np.log(self.spot_price/strike) + 
-             (mu - 0.5*sigma**2)*t) / (sigma*np.sqrt(t))
-        return norm.cdf(d2)
+        
+        # 计算在到期时股价高于低行权价的概率
+        d1_long = (np.log(self.spot_price/long_strike) + 
+                  (0.05 + 0.5*sigma**2)*t) / (sigma*np.sqrt(t))
+        prob_above_long = norm.cdf(d1_long)
+        
+        # 计算在到期时股价高于高行权价的概率
+        d1_short = (np.log(self.spot_price/short_strike) + 
+                   (0.05 + 0.5*sigma**2)*t) / (sigma*np.sqrt(t))
+        prob_above_short = norm.cdf(d1_short)
+        
+        # 牛市价差的最大获利区间是在高行权价以下
+        # 胜率 = P(长期价格 > 低行权价) - P(长期价格 > 高行权价)
+        probability = (prob_above_long - prob_above_short) * 100
+        
+        return probability
