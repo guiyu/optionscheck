@@ -12,161 +12,198 @@ class DataLoader:
         self.yahoo = Ticker(
             ticker, 
             asynchronous=True,
-            formatted=False,
-            retry=5,
-            backoff_factor=0.3
+            status_forcelist=[404, 429, 500],
+            backoff_factor=0.3,
+            verify=False
         )
+        self.spot_price = None
+        self.last_update = None
+        self.session = requests.Session()
+        self.cache = {}
     
     def _load_config(self):
-        with open('config/config.yaml') as f:
+        """加载配置文件"""
+        config_path = os.path.join(os.path.dirname(__file__), '../config/config.yaml')
+        with open(config_path) as f:
             return yaml.safe_load(f)
     
-    def _get_session(self):
-        """创建带有自定义请求头的会话"""
-        session = requests.Session()
-        session.headers.update({
-            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'Accept': '*/*',
-            'Accept-Language': 'en-US,en;q=0.9',
-            'Accept-Encoding': 'gzip, deflate, br',
-            'Connection': 'keep-alive',
-        })
-        return session
-    
-    def get_real_time_data(self, interval='5m'):
-        """获取实时行情数据"""
+    def get_spot_price(self):
+        """获取实时现货价格（多源回退+智能缓存）"""
         try:
-            # 使用yahooquery获取历史数据
-            df = self.yahoo.history(period='1d', interval=interval)
-            if isinstance(df, dict) or df.empty:
-                return pd.DataFrame()
-            
-            # 只保留需要的列
-            df = df[['open', 'high', 'low', 'close', 'volume']]
-            # 标准化列名
-            df.columns = ['Open', 'High', 'Low', 'Close', 'Volume']
-            return df.dropna()
+            if self._needs_refresh():
+                self._refresh_spot_price()
+            return float(self.spot_price)
         except Exception as e:
-            print(f"数据获取失败: {str(e)}")
-            return pd.DataFrame()
-    
-    def fetch_option_chain(self, expiration=None):
-        """获取完整期权链数据"""
-        try:
-            print("\n开始获取期权数据...")
-            print(f"股票代码: {self.ticker}")
-            
-            # 获取期权链
-            chains = self.yahoo.option_chain
-            if isinstance(chains, dict):  # 错误响应
-                print(f"警告: {self.ticker} 期权数据获取失败")
-                return pd.DataFrame()
-            
-            if chains.empty:  # 空数据
-                print(f"警告: {self.ticker} 没有可用的期权数据")
-                return pd.DataFrame()
-            
-            # 获取可用的期权到期日
-            expiration_dates = chains.index.get_level_values('expiration').unique()
-            print(f"可用的期权到期日: {expiration_dates.tolist()}")
-            
-            # 如果没有指定到期日，使用最近的到期日
-            if expiration is None:
-                expiration = expiration_dates[0]
-                print(f"使用最近到期日: {expiration}")
-            elif expiration not in expiration_dates:
-                print(f"警告: 指定的到期日 {expiration} 不可用")
-                return pd.DataFrame()
-            
-            try:
-                # 获取指定到期日的数据
-                exp_chains = chains[chains.index.get_level_values('expiration') == expiration]
-                
-                # 分离看涨和看跌期权
-                # 检查数据结构
-                print("\n数据结构信息:")
-                print(f"列名: {exp_chains.columns.tolist()}")
-                print(f"索引: {exp_chains.index.names}")
-                print(f"样本数据:\n{exp_chains.head(1)}")
-                
-                # 根据索引级别分离看涨和看跌期权
-                calls = exp_chains.xs('calls', level='optionType').assign(type='call')
-                puts = exp_chains.xs('puts', level='optionType').assign(type='put')
-                
-                print(f"\n期权数据获取成功:")
-                print(f"看涨期权数量: {len(calls)}")
-                print(f"看跌期权数量: {len(puts)}")
-                
-                # 合并数据
-                option_chain = pd.concat([calls, puts])
-                
-                # 添加到期日和剩余天数
-                option_chain['expiration'] = expiration
-                option_chain['days_to_expire'] = (
-                    pd.to_datetime(expiration) - pd.Timestamp.now()
-                ).days
-                
-                # 标准化列名
-                column_mapping = {
-                    'strike': 'strike',
-                    'lastPrice': 'lastPrice',
-                    'bid': 'bid',
-                    'ask': 'ask',
-                    'volume': 'volume',
-                    'impliedVolatility': 'impliedVolatility',
-                }
-                
-                # 重命名列
-                option_chain = option_chain.rename(columns=column_mapping)
-                
-                # 确保所需列都存在
-                required_cols = ['strike', 'bid', 'ask', 'volume', 'impliedVolatility',
-                               'type', 'expiration', 'days_to_expire']
-                
-                for col in required_cols:
-                    if col not in option_chain.columns:
-                        print(f"添加缺失的列: {col}")
-                        option_chain[col] = 0
-                
-                # 数据类型转换
-                numeric_cols = ['strike', 'bid', 'ask', 'volume', 'impliedVolatility']
-                for col in numeric_cols:
-                    option_chain[col] = pd.to_numeric(option_chain[col], errors='coerce').fillna(0)
-                
-                result = option_chain[required_cols].reset_index(drop=True)
+            print(f"价格获取失败: {e}, 使用最后缓存值")
+            return self.spot_price or self._get_fallback_price()
 
-                # 添加IV过滤
-                valid_iv_mask = (option_chain['impliedVolatility'] > 0.2) & (option_chain['impliedVolatility'] < 1.0)
-                option_chain = option_chain[valid_iv_mask]
-                print(f"过滤后有效合约数量: {len(option_chain)}")
-                
-                print(f"\n最终数据信息:")
-                print(f"总行数: {len(result)}")
-                print(f"列名: {result.columns.tolist()}")
-                if not result.empty:
-                    print(f"样本数据:\n{result.head(1)}")
-                
-                return option_chain
-                
+    def _needs_refresh(self):
+        """智能刷新判断"""
+        if self.spot_price is None:
+            return True
+        elapsed = (pd.Timestamp.now() - self.last_update).seconds
+        return elapsed > min(300, self.config['data_refresh_interval'])
+
+    def _refresh_spot_price(self):
+        """多数据源刷新策略"""
+        sources = [
+            ('alpha_vantage', self._fetch_alpha_vantage),
+            ('yahoo', self._fetch_yahoo_realtime),
+            ('backup', self._fetch_backup_api)
+        ]
+        
+        for source_name, source_func in sources:
+            try:
+                price = source_func()
+                if self._validate_price(price):
+                    self.spot_price = price
+                    self.last_update = pd.Timestamp.now()
+                    print(f"✅ 从 {source_name} 获取最新价格: {price}")
+                    return
             except Exception as e:
-                print(f"处理期权数据失败: {str(e)}")
-                print(f"错误类型: {type(e)}")
-                import traceback
-                print(f"错误堆栈:\n{traceback.format_exc()}")
+                print(f"⚠️ {source_name} 数据源异常: {str(e)}")
+        
+        print("⚠️ 所有数据源不可用，使用缓存")
+        self.spot_price = self._get_cached_price()
+
+    def _fetch_alpha_vantage(self):
+        """AlphaVantage实时数据"""
+        params = {
+            'function': 'GLOBAL_QUOTE',
+            'symbol': self.ticker,
+            'apikey': self.config['data_sources']['alpha_vantage']['api_key']
+        }
+        resp = self.session.get(
+            self.config['data_sources']['alpha_vantage']['api_endpoint'],
+            params=params,
+            timeout=3
+        )
+        resp.raise_for_status()
+        return float(resp.json()['Global Quote']['05. price'])
+
+    def _fetch_yahoo_realtime(self):
+        """Yahoo Finance实时报价"""
+        data = self.yahoo.history(period='1d', interval='1m')
+        if len(data) < 1:
+            raise ValueError("无实时数据")
+        return data['close'].iloc[-1]
+
+    def _fetch_backup_api(self):
+        """备用数据源（带本地缓存）"""
+        cache_key = f"{self.ticker}_spot"
+        if cache_key in self.cache:
+            cached_time = self.cache[cache_key]['timestamp']
+            if (pd.Timestamp.now() - cached_time).seconds < 7200:  # 2小时缓存
+                return self.cache[cache_key]['price']
+        
+        # 从公开API获取
+        resp = self.session.get(
+            f"https://financialmodelingprep.com/api/v3/quote-short/{self.ticker}",
+            params={'apikey': self.config['data_sources']['backup_api_key']},
+            timeout=5
+        )
+        price = resp.json()[0]['price']
+        self.cache[cache_key] = {
+            'price': price,
+            'timestamp': pd.Timestamp.now()
+        }
+        return price
+
+    def _validate_price(self, price):
+        """价格合理性验证"""
+        if not isinstance(price, (int, float)):
+            raise ValueError("价格类型错误")
+        if price <= 0:
+            raise ValueError("价格无效")
+        if self.spot_price:  # 检查波动幅度
+            change_pct = abs(price - self.spot_price) / self.spot_price
+            if change_pct > 0.1:  # 单次波动超过10%需要确认
+                print(f"⚠️ 价格波动异常: {change_pct*100:.2f}%")
+                return False
+        return True
+
+    def _get_cached_price(self):
+        """获取最近有效价格"""
+        if self.spot_price:
+            return self.spot_price
+        # 获取历史数据
+        hist = self.yahoo.history(period='5d')
+        return hist['close'].iloc[-1] if not hist.empty else 0.0
+
+    def _get_fallback_price(self):
+        """最终回退方案"""
+        try:
+            return self.yahoo.price[self.ticker]['regularMarketPrice']
+        except:
+            return 0.0  # 确保程序不会崩溃
+
+    def fetch_option_chain(self):
+        """获取期权链数据（容错增强版）"""
+        try:
+            chain = self._fetch_option_chain_base()
+            if chain.empty:
+                print("⚠️ 获取到空期权链")
+                return pd.DataFrame()
+            
+            # 转换日期格式
+            chain['expiration'] = pd.to_datetime(chain['expiration'], errors='coerce')
+            chain = chain.dropna(subset=['expiration'])
+            
+            # 添加特征工程
+            now = pd.Timestamp.now().normalize()
+            chain['days_to_expire'] = (chain['expiration'] - now).dt.days
+            chain['is_weekly'] = chain['expiration'].dt.day.isin([15,22])
+            chain['is_monthly'] = (chain['expiration'].dt.day >= 15) & (chain['expiration'].dt.day <= 21)
+            
+            print(f"✅ 处理后的期权链包含 {len(chain)} 条记录")
+            return chain
+            
+        except Exception as e:
+            print(f"期权链处理失败: {str(e)}")
+            return pd.DataFrame()
+
+    def _fetch_option_chain_base(self):
+        """使用yahooquery获取期权链数据"""
+        try:
+            print("\n⌛ 正在通过yahooquery获取期权链...")
+            # 获取期权链数据
+            chain = self.yahoo.option_chain
+            if isinstance(chain, dict) and 'error' in chain:
+                print(f"❌ 错误响应: {chain['error']}")
                 return pd.DataFrame()
                 
+            # 合并看涨和看跌期权
+            calls = pd.DataFrame(chain.get('calls', []))
+            puts = pd.DataFrame(chain.get('puts', []))
+            
+            # 添加type列
+            if not calls.empty:
+                calls['type'] = 'call'
+            if not puts.empty:
+                puts['type'] = 'put'
+                
+            chain = pd.concat([calls, puts], ignore_index=True)
+            
+            # 必要字段检查
+            required_columns = ['expiration', 'strike', 'bid', 'ask']
+            missing = [col for col in required_columns if col not in chain.columns]
+            if missing:
+                print(f"❌ 缺少必要字段: {missing}")
+                return pd.DataFrame()
+            
+            # 转换日期格式
+            chain['expiration'] = pd.to_datetime(chain['expiration'], errors='coerce')
+            return chain[['expiration', 'strike', 'type', 'bid', 'ask', 'volume']]
+            
         except Exception as e:
-            print(f"\n获取期权链时发生错误: {str(e)}")
-            print(f"错误类型: {type(e)}")
-            import traceback
-            print(f"错误堆栈:\n{traceback.format_exc()}")
+            print(f"❌ 获取期权链失败: {str(e)}")
             return pd.DataFrame()
-    
+
     def get_earnings_dates(self):
-        """获取财报日历"""
+        """获取财报日历（使用yahooquery）"""
         try:
             # ETF没有财报日期
-            if 'QQQ' in self.ticker or 'SPY' in self.ticker:
+            if any(etf in self.ticker.upper() for etf in ['QQQ', 'SPY', 'IWM']):
                 return []
                 
             # 使用yahooquery获取财报信息
@@ -174,12 +211,10 @@ class DataLoader:
             if isinstance(calendar, dict) or calendar.empty:
                 return []
             
-            # 获取未来的财报日期
-            if 'Earnings Date' in calendar.columns:
-                future_dates = calendar[
-                    calendar['Earnings Date'] > pd.Timestamp.now()
-                ]['Earnings Date']
-                return [d.to_pydatetime() for d in future_dates]
+            # 解析财报日期
+            if 'earnings_date' in calendar.columns:
+                dates = pd.to_datetime(calendar['earnings_date'].iloc[0], errors='coerce')
+                return [d.to_pydatetime() for d in dates if d > pd.Timestamp.now()]
             
             return []
             

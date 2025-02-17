@@ -18,10 +18,21 @@ data_sources:
     
 strategy:
   iv_percentile_threshold: 40  # IV rank阈值
-  min_volume: 200  # 最小成交量
-  max_spread_ratio: 0.5  # 最大价差比例
+  min_volume: 20  # 降低基础流动性要求
+  min_volume_fallback: 10  # 回退流动性要求
+  max_spread_ratio: 0.3 # 最大价差比例
   min_iv: 0.25             # 过滤低波动率合约
   max_vega: 0.5  # 最大Vega敞口
   polling_interval: 15  # minutes
+  strike_tolerance: 0.10  # 扩大行权价容差
+  max_attempts: 3         # 最大尝试次数
+  expiration_selection:
+    target_days: 30  # 目标到期天数
+    tolerance_days: 5  # 允许偏差天数
+    min_volume_monthly: 1000  # 月期权最低成交量
 
 watchlist: ["QQQ", "SPY", "NVDA", "TSLA", "ASML"]
+
+data_refresh_interval: 180  # 单位：秒
+data_sources:
+  backup_api_key: "your_api_key_here"
