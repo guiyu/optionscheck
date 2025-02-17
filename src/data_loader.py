@@ -6,29 +6,36 @@ from datetime import datetime
 import requests
 import yfinance as yf
 import numpy as np
+import time
 
 class DataLoader:
     def __init__(self, ticker):
         self.ticker = ticker
         self.config = self._load_config()
-        # 从配置中获取代理设置
-        proxies = self.config.get('api_settings', {}).get('yahoo', {}).get('proxies', None)
+        # 初始化请求时间属性
+        self.last_request_time = 0
+        self.request_interval = 2  # 默认请求间隔
         
-        # 添加自定义请求头
+        # 代理配置和请求头初始化
+        proxies = self.config.get('api_settings', {}).get('yahoo', {}).get('proxies', None)
         headers = {
             'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
             'Accept': 'application/json'
         }
+        
+        # 初始化Yahoo API客户端
         self.yahoo = Ticker(
             ticker,
-            headers=headers,  # 添加请求头
+            headers=headers,
             asynchronous=True,
             formatted=False,
             retry=5,
             backoff_factor=0.3,
             validate=True,
-            proxies=proxies  # 添加代理配置
+            proxies=proxies
         )
+        
+        # 其他数据初始化
         self.spot_price = self._get_spot_price()
         self.option_chain = self._fetch_raw_option_chain()
         self.processed_chain = self._process_chain(self.option_chain)
@@ -170,9 +177,10 @@ class DataLoader:
 
     def _fetch_raw_option_chain(self):
         """使用正确的YahooQuery API方法"""
+        self._rate_limit()  # 添加速率限制
         try:
-            # 获取所有期权到期日
-            exp_dates = self.yahoo.option_expiration_dates
+            # 使用正确的API方法获取到期日
+            exp_dates = self.yahoo.option_chain.expiration_dates
             if not exp_dates:
                 raise ValueError("没有可用的期权到期日")
             
@@ -363,3 +371,29 @@ class DataLoader:
                 print(f"网络异常: {url} - {str(e)}")
                 return False
         return True
+
+    def _rate_limit(self):
+        """更安全的速率限制方法"""
+        try:
+            current_time = time.time()
+            elapsed = current_time - getattr(self, 'last_request_time', 0)
+            interval = getattr(self, 'request_interval', 2)
+            
+            if elapsed < interval:
+                sleep_time = interval - elapsed
+                time.sleep(max(sleep_time, 0))  # 确保非负
+            
+            self.last_request_time = current_time
+        except AttributeError:
+            # 处理属性未初始化的情况
+            self.last_request_time = time.time()
+            self.request_interval = 2
+
+    def __getattr__(self, name):
+        """处理未初始化属性的访问"""
+        if name in ['last_request_time', 'request_interval']:
+            # 自动初始化时间相关属性
+            self.last_request_time = time.time()
+            self.request_interval = 2
+            return getattr(self, name)
+        raise AttributeError(f"'DataLoader' object has no attribute '{name}'")
