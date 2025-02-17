@@ -3,16 +3,23 @@ from src.signal_generator import SignalGenerator
 from src.risk_manager import RiskManager
 import click
 import numpy as np
+import logging
 
 @click.command()
 @click.option('--ticker', required=True, help='标的代码，例如：QQQ, NVDA')
 @click.option('--no-color', is_flag=True, help='禁用彩色输出')
-def main(ticker, no_color):
+@click.option('--refresh', is_flag=True, help='强制刷新数据')
+@click.option('--debug', is_flag=True, help='显示调试信息')
+def main(ticker, no_color, refresh, debug):
     """期权交易决策命令行接口"""
+    if debug:
+        logging.basicConfig(level=logging.DEBUG)
     # 添加颜色控制
     if no_color:
         click.echo = lambda x, **kw: click.secho(x, **kw)
     dl = DataLoader(ticker)
+    if refresh:
+        dl.refresh_data()
     sg = SignalGenerator(dl)
     rm = RiskManager(dl.config['strategy'])
     

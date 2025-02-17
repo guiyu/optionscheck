@@ -25,3 +25,12 @@ strategy:
   polling_interval: 15  # minutes
 
 watchlist: ["QQQ", "SPY", "NVDA", "TSLA", "ASML"]
+
+api_settings:
+  yahoo:
+    retry: 5
+    timeout: 10
+    proxies:
+      http: http://your-proxy:port
+      https: http://your-proxy:port
+  use_mock_data: false

@@ -11,16 +11,30 @@ class DataLoader:
     def __init__(self, ticker):
         self.ticker = ticker
         self.config = self._load_config()
+        # 从配置中获取代理设置
+        proxies = self.config.get('api_settings', {}).get('yahoo', {}).get('proxies', None)
+        
+        # 添加自定义请求头
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': 'application/json'
+        }
         self.yahoo = Ticker(
-            ticker, 
+            ticker,
+            headers=headers,  # 添加请求头
             asynchronous=True,
             formatted=False,
             retry=5,
-            backoff_factor=0.3
+            backoff_factor=0.3,
+            validate=True,
+            proxies=proxies  # 添加代理配置
         )
         self.spot_price = self._get_spot_price()
         self.option_chain = self._fetch_raw_option_chain()
         self.processed_chain = self._process_chain(self.option_chain)
+        self.last_updated = datetime.now()
+        if not self._validate_api_config():
+            raise ValueError("Invalid API configuration")
     
     def _load_config(self):
         with open('config/config.yaml') as f:
@@ -155,61 +169,91 @@ class DataLoader:
         return data['Close'].iloc[-1]
 
     def _fetch_raw_option_chain(self):
-        """包含完整字段的模拟数据"""
-        return pd.DataFrame({
-            'strike': [400, 410, 420],
-            'bid': [1.2, 1.1, 1.0],
-            'ask': [1.3, 1.2, 1.1],
-            'type': ['call', 'call', 'put'],
-            'days_to_expire': [30, 45, 60],
-            'volume': [1000, 2000, 1500],
-            'impliedVolatility': [0.35, 0.4, 0.5],
-            'score': [65, 70, 75]  # 新增评分字段
-        })
+        """使用正确的YahooQuery API方法"""
+        try:
+            # 获取所有期权到期日
+            exp_dates = self.yahoo.option_expiration_dates
+            if not exp_dates:
+                raise ValueError("没有可用的期权到期日")
+            
+            # 获取最近三个到期日的数据
+            all_chains = []
+            for date in exp_dates[:3]:
+                # 获取指定到期日的期权链
+                options = self.yahoo.option_chain(date=date)
+                if options and 'calls' in options and 'puts' in options:
+                    # 处理看涨期权
+                    calls = pd.DataFrame(options['calls'])
+                    calls['type'] = 'call'
+                    # 处理看跌期权
+                    puts = pd.DataFrame(options['puts'])
+                    puts['type'] = 'put'
+                    # 合并数据
+                    all_chains.append(pd.concat([calls, puts]))
+            
+            if not all_chains:
+                raise ValueError("没有有效的期权数据")
+            
+            return pd.concat(all_chains, ignore_index=True)
+            
+        except Exception as e:
+            print(f"API请求失败: {str(e)}")
+            return self._get_fallback_data()
 
     def _process_chain(self, raw_chain):
-        """将DataFrame转换为字典列表"""
-        if raw_chain.empty:
-            return []
-        
-        # 转换数据类型
-        raw_chain = raw_chain.astype({
-            'strike': float,
-            'bid': float,
-            'ask': float,
-            'volume': int,
-            'impliedVolatility': float,
-            'days_to_expire': int
-        })
-        
-        # 转换为字典列表并重命名键
-        processed = [{
-            'type': row['type'],
-            'strike': row['strike'],
-            'bid': row['bid'],
-            'ask': row['ask'],
-            'volume': row['volume'],
-            'iv': row['impliedVolatility'],
-            'days_to_exp': row['days_to_expire']
-        } for _, row in raw_chain.iterrows()]
-        
-        # 添加有效性过滤
-        print(f"\n🔎 数据清洗结果：")
-        print(f"原始合约数量：{len(raw_chain)}")
-        print(f"有效波动率合约：{len([c for c in processed if c['iv'] > 0])}")
-        print(f"有效到期日合约：{len([c for c in processed if c['days_to_exp'] > 0])}")
-        
-        print("\n🔍 数据完整性检查：")
-        print(f"最早到期日：{min(c['days_to_exp'] for c in processed)}天")
-        print(f"最晚到期日：{max(c['days_to_exp'] for c in processed)}天")
-        print(f"平均波动率：{np.mean([c['iv'] for c in processed]):.1%}")
-        
-        return [
-            c for c in processed 
-            if 3 <= c.get('days_to_exp', 0) <= 730  # 允许2年内的合约
-            and c.get('iv', 0) > 0.15  # 进一步降低IV要求
-            and c.get('volume', 0) > 0  # 至少要有成交量记录
-        ]
+        """处理真实API数据"""
+        try:
+            # 转换数据类型时使用安全方法
+            type_mapping = {
+                'strike': float,
+                'bid': float,
+                'ask': float,
+                'volume': int,
+                'impliedVolatility': float
+            }
+            # 仅转换存在的字段
+            valid_columns = [col for col in type_mapping if col in raw_chain.columns]
+            raw_chain = raw_chain.astype({col: type_mapping[col] for col in valid_columns})
+            
+            # 添加合约类型判断
+            raw_chain['type'] = raw_chain['contractSymbol'].apply(
+                lambda s: 'call' if s.endswith('C') else 'put'
+            )
+            
+            # 添加日期处理保护
+            if 'expiration' in raw_chain.columns:
+                try:
+                    raw_chain['expiration'] = pd.to_datetime(raw_chain['expiration'])
+                    raw_chain['days_to_expire'] = (raw_chain['expiration'] - pd.Timestamp.now()).dt.days
+                except Exception as e:
+                    print(f"日期处理错误: {str(e)}")
+            else:
+                print("⚠️ 数据缺少expiration字段")
+                return self._get_fallback_processed_data()
+            
+            # 转换为字典列表
+            return [
+                {
+                    'type': row['type'],
+                    'strike': row['strike'],
+                    'bid': row['bid'],
+                    'ask': row['ask'],
+                    'volume': row['volume'],
+                    'iv': row['impliedVolatility'],
+                    'days_to_exp': row['days_to_expire']
+                }
+                for _, row in raw_chain.iterrows()
+            ]
+            
+        except Exception as e:
+            print(f"数据处理失败: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            return self._get_fallback_processed_data()
+
+    def _detect_contract_type(self, symbol):
+        """根据合约代码判断类型"""
+        return 'call' if symbol.endswith('C') else 'put'
 
     @property
     def chain(self):
@@ -246,3 +290,76 @@ class DataLoader:
             '3M': 0.4,
             '6M': 0.45
         }
+
+    def is_data_fresh(self):
+        """检查数据是否在5分钟内更新"""
+        return (datetime.now() - self.last_updated).seconds < 300
+
+    def refresh_data(self):
+        """增强数据刷新逻辑"""
+        if self.is_data_fresh():
+            print("数据仍在有效期内，无需刷新")
+            return
+        
+        try:
+            self.option_chain = self._fetch_raw_option_chain()
+            self.processed_chain = self._process_chain(self.option_chain)
+            self.last_updated = datetime.now()
+            print(f"数据刷新成功，最新更新时间：{self.last_updated.strftime('%Y-%m-%d %H:%M:%S')}")
+        except Exception as e:
+            print(f"数据刷新失败: {str(e)}")
+            print("使用缓存数据继续运行")
+
+    def _get_fallback_data(self):
+        """生成带完整字段的模拟数据"""
+        return pd.DataFrame({
+            'contractSymbol': ['SPY220101C00400000', 'SPY220101P00410000', 'SPY220101C00420000'],
+            'strike': [400.0, 410.0, 420.0],
+            'bid': [1.2, 1.1, 1.0],
+            'ask': [1.3, 1.2, 1.1],
+            'volume': [1000, 2000, 1500],
+            'impliedVolatility': [0.35, 0.4, 0.5],
+            'expiration': [
+                pd.Timestamp.now() + pd.Timedelta(days=30),
+                pd.Timestamp.now() + pd.Timedelta(days=45),
+                pd.Timestamp.now() + pd.Timedelta(days=60)
+            ],
+            'type': ['call', 'put', 'call']
+        })
+
+    def _get_fallback_processed_data(self):
+        """生成处理后的模拟数据"""
+        return self._process_chain(self._get_fallback_data())
+
+    def check_api_connection(self):
+        """检查API连通性"""
+        try:
+            test = requests.get('https://query1.finance.yahoo.com', timeout=5)
+            return test.status_code == 200
+        except Exception as e:
+            print(f"网络连接异常: {str(e)}")
+            return False
+
+    def _validate_api_config(self):
+        """验证必要配置项"""
+        required_keys = ['api_settings', 'strategy']
+        return all(k in self.config for k in required_keys)
+
+    def check_network_connection(self):
+        """检查网络连通性"""
+        test_urls = [
+            'https://finance.yahoo.com',
+            'https://query1.finance.yahoo.com',
+            'https://query2.finance.yahoo.com'
+        ]
+        
+        for url in test_urls:
+            try:
+                response = requests.get(url, timeout=5)
+                if response.status_code != 200:
+                    print(f"连接失败: {url} (状态码: {response.status_code})")
+                    return False
+            except Exception as e:
+                print(f"网络异常: {url} - {str(e)}")
+                return False
+        return True
