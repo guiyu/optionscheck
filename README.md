@@ -1,135 +1,129 @@
 # 智能期权交易系统
 
-## 系统架构设计
-![架构图](https://via.placeholder.com/800x400.png?text=Option+Trading+System+Architecture)
+![系统架构图](docs/architecture/flowchart.png)
 
-### 设计模式
-1. **观察者模式** - 市场数据变动时自动通知策略引擎
-2. **策略模式** - 不同交易策略可插拔替换
-3. **工厂模式** - 期权合约对象的统一创建
-4. **装饰器模式** - 风险控制规则的动态叠加
+## 功能特性
+- 多维度策略分析（波动率、基本面、技术面等）
+- 实时风险管理体系
+- 策略回测与优化
+- 自动再平衡机制
+- 实时监控告警
 
-### 数据流
-1. 数据层：Yahoo Finance/Polygon → DataLoader
-2. 处理层：SignalGenerator + RiskManager
-3. 输出层：Telegram通知/日志记录
-
-### 核心模块
-| 模块 | 职责 | 关键技术 |
-|------|-----|---------|
-| DataLoader | 实时数据采集 | yfinance, API轮询 |
-| VolatilityEngine | 波动率分析 | GARCH模型, IV曲面拟合 | 
-| GreekCalculator | 风险指标计算 | 自动微分, 数值逼近 |
-| TelegramBot | 消息通知 | 异步IO, 消息队列 |
-
-### 策略图
-graph TD
-    A[启动守护进程] --> B[轮询标的列表]
-    B --> C{符合条件?}
-    C -->|Yes| D[执行策略分析]
-    D --> E[风险检查]
-    E --> F[生成信号]
-    F --> G[发送Telegram通知]
-    C -->|No| H[等待下一周期]
-
-## 部署指南
-
-### 后台服务运行
+## 快速开始
+### 本地运行
 ```bash
-# 复制系统服务文件
-sudo cp systemd/option_trading.service /etc/systemd/system/
-
-# 启动服务
-sudo systemctl daemon-reload
-sudo systemctl start option_trading
+pip install -r requirements.txt
+python -m src.cli --ticker TSLA
 ```
 
-## 📦 安装指南
+### 生产部署
 ```bash
-# 克隆仓库
-git clone https://github.com/yourrepo/optionscheck.git
-cd optionscheck
+# Kubernetes部署
+kubectl apply -f deploy/k8s/
 
-# 安装依赖
-pip install -e .
-
-# 初始化配置
-cp config/config.yaml.example config/config.yaml
+# AWS Fargate部署
+terraform -chdir=deploy/aws apply
 ```
 
-## ⚙️ 配置说明
-编辑`config/config.yaml`：
-```yaml
-watchlist: ["SPY", "QQQ", "TSLA"]  # 监控标的
-strategy:
-  min_volume: 20                   # 最低成交量要求
-  iv_threshold: 40                 # IV Rank阈值
-  expiration_range: [25, 35]       # 目标到期日范围(天)
-  risk:
-    max_delta: 0.5                 # 最大Delta敞口
-    max_theta: -0.1                # 最大Theta损失
-```
+## 核心模块
+| 模块                | 功能描述                     |
+|---------------------|----------------------------|
+| `signal_generator`  | 生成交易策略                 |
+| `risk_manager`      | 多维度风险控制               |
+| `data_pipeline`     | 实时数据流处理               |
+| `portfolio_rebalancer` | 自动调仓                 |
 
-## 🚀 使用示例
+## 详细使用指南
+
+### 1. 本地测试方案
 ```bash
-# 分析单个标的
-python -m src.cli --ticker SPY --debug
+# 运行单元测试
+pytest tests/unit/
 
-# 监控观察列表
-python -m src.cli --watchlist --interval 15
+# 执行集成测试
+pytest tests/integration/
+
+# 性能基准测试
+pytest tests/performance/ -m "not slow"
 ```
 
-## 📊 数据流程图
-```mermaid
-sequenceDiagram
-    participant User
-    participant System
-    participant YahooAPI
-    participant RiskEngine
-    
-    User->>System: 启动分析请求
-    System->>YahooAPI: 获取期权链数据
-    YahooAPI-->>System: 返回原始数据
-    System->>System: 数据清洗加工
-    System->>RiskEngine: 执行风险检查
-    RiskEngine-->>System: 返回风险评估
-    System-->>User: 生成交易信号
-```
-
-## 🛠️ 开发指南
-### 扩展新策略
-1. 在`src/strategies/`下新建策略类
-2. 实现核心方法：
+### 2. 数据回测方案
 ```python
-class MyStrategy(BaseStrategy):
-    def generate_signal(self, data):
-        # 实现策略逻辑
-        return Signal(...)
+from src.backtest import StrategyBacktester
+
+backtester = StrategyBacktester(config)
+backtester.load_data('TSLA', '2023-01-01', '2024-01-01')
+results = backtester.run_backtest()
+results.plot_performance()
 ```
-3. 在`src/signal_generator.py`中注册策略
 
-## 🔧 故障排查
-常见问题：
-1. **数据获取失败**
-   - 检查网络连接
-   - 验证API密钥配置
-   - 查看`logs/error.log`
+### 3. 正式调用方案
+#### CLI方式
+```bash
+python -m src.cli --ticker NVDA --strategy vertical_spread
+```
 
-2. **策略无输出**
-   - 检查标的流动性
-   - 调整`min_volume`参数
-   - 启用调试模式查看中间结果
+#### API方式
+```python
+from src.core.interface import TradingSystem
 
-## 🤝 贡献指南
-欢迎通过以下方式参与贡献：
-1. 提交Issue报告问题
-2. 发起Pull Request改进代码
-3. 完善文档翻译
-4. 分享使用案例
+system = TradingSystem('SPY')
+strategies = system.get_recommendations()
+print(f"推荐策略: {strategies[0]}")
+```
 
-## 📄 许可证
-本项目采用 [MIT License](LICENSE)，可自由用于商业和个人用途。使用本系统产生的交易风险需自行承担。
+### 4. 生产部署方案
+#### 容器部署
+```dockerfile
+FROM python:3.9-slim
+COPY . /app
+RUN pip install -r requirements.txt
+CMD ["python", "-m", "src.daemon"]
+```
 
----
+#### 云原生部署
+```yaml
+# Kubernetes部署配置示例
+apiVersion: apps/v1
+kind: Deployment
+spec:
+  replicas: 3
+  template:
+    spec:
+      containers:
+      - name: option-system
+        image: registry.example.com/option-system:v1.3
+        resources:
+          limits:
+            cpu: "1"
+            memory: "2Gi"
+```
 
-> 📌 提示：建议交易前在模拟环境中充分测试策略，实际交易中请合理控制风险敞口。
+## 监控告警
+配置Prometheus监控规则：
+```yaml
+- alert: HighLatency
+  expr: system_latency_seconds{quantile="0.95"} > 2
+  for: 5m
+  labels:
+    severity: critical
+```
+
+## 版本规划
+| 版本   | 功能                  | 预计上线时间 |
+|--------|----------------------|-------------|
+| v1.3   | 基础策略引擎          | 2025-Q2     |
+| v2.0   | 机器学习优化          | 2025-Q3     |
+| v3.0   | 实盘交易接口          | 2025-Q4     |
+
+## 贡献指南
+1. Fork项目仓库
+2. 创建特性分支 (`git checkout -b feature/awesome`)
+3. 提交修改 (`git commit -am 'Add awesome feature'`)
+4. 推送到分支 (`git push origin feature/awesome`)
+5. 创建Pull Request
+
+## 许可协议
+[MIT License](LICENSE)
+
+> 📌 注意：实盘交易前请充分测试策略，建议初始资金不超过总资金的2%

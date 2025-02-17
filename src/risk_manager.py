@@ -35,3 +35,20 @@ class RiskManager:
         if risk_score < 0.2: return '低'
         elif risk_score < 0.5: return '中'
         else: return '高'
+
+    def validate_strategy(self, strategy):
+        """综合验证策略风险"""
+        checks = [
+            self.check_iv_risk(strategy),
+            self.check_liquidity(strategy),
+            self.check_sector_exposure(),
+            self.check_margin_requirement(strategy)
+        ]
+        return all(checks)
+
+    def check_iv_risk(self, strategy):
+        """IV风险校验"""
+        iv_rank = strategy['details']['iv_rank']
+        if iv_rank > 80 and strategy['type'] == 'sell_put':
+            return False  # 避免在极高IV时裸卖put
+        return True

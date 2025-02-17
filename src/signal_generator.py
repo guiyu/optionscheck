@@ -10,7 +10,8 @@ class SignalGenerator:
     def __init__(self, data_loader):
         self.dl = data_loader
         self.config = data_loader.config
-        self.spot_price = None
+        self.spot_price = data_loader.spot_price
+        self.chain = data_loader.fetch_option_chain()
     
     def generate_vertical_spread_signal(self):
         """生成垂直价差信号"""
@@ -168,3 +169,203 @@ class SignalGenerator:
         # 使用Black-Scholes公式计算Delta修正概率
         d1 = (np.log(spot/strike) + (0.5 * iv**2) * t) / (iv * np.sqrt(t))
         return norm.cdf(d1)  # 返回真实概率
+
+    def _calculate_strategy_score(self, contract):
+        """根据PRD权重计算策略得分"""
+        score = 0
+        
+        # 波动率指标（20%）
+        score += self._iv_analysis_score(contract) * 0.2
+        
+        # 公司基本面（15%）
+        score += self._fundamental_score() * 0.15
+        
+        # 宏观经济（15%）
+        score += self._macro_economic_score() * 0.15
+        
+        # 技术分析（12%）
+        score += self._technical_score() * 0.12
+        
+        # 希腊字母（12%）
+        score += self._greeks_score(contract) * 0.12
+        
+        # 行业相关（10%）
+        score += self._industry_correlation_score() * 0.1
+        
+        # 市场情绪（8%）
+        score += self._market_sentiment_score() * 0.08
+        
+        # 流动性（5%）
+        score += self._liquidity_score(contract) * 0.05
+        
+        # 特殊事件（3%）
+        score += self._event_risk_score() * 0.03
+        
+        return min(score * 100, 100)  # 转换为百分比
+
+    def generate_top_strategies(self):
+        """生成前3名策略"""
+        strategies = []
+        
+        # 筛选有效合约
+        valid_puts = self._filter_valid_contracts('put')
+        valid_spreads = self._generate_spread_candidates(valid_puts)
+        
+        # 计算所有候选策略得分
+        scored_strategies = []
+        for contract in valid_puts:
+            scored_strategies.append({
+                'type': 'sell_put',
+                'strike': contract['strike'],
+                'score': self._calculate_strategy_score(contract),
+                'details': self._get_score_details(contract)
+            })
+            
+        for spread in valid_spreads:
+            scored_strategies.append({
+                'type': 'bull_put_spread',
+                'strikes': (spread['short_strike'], spread['long_strike']),
+                'score': (spread['short_score'] + spread['long_score']) / 2,
+                'details': spread['details']
+            })
+        
+        # 按得分排序并取前3
+        return sorted(scored_strategies, key=lambda x: x['score'], reverse=True)[:3]
+
+    def _filter_valid_contracts(self, option_type):
+        """根据PRD基础条件筛选合约"""
+        return [
+            c for c in self.chain 
+            if c['type'] == option_type
+            and c['days_to_exp'] in range(21, 46)
+            and c['volume'] > 5000
+            and (c['ask'] - c['bid']) / c['ask'] < 0.005
+        ]
+
+    def _get_score_details(self, contract):
+        """获取各维度得分明细"""
+        return {
+            'iv_rank': self.dl.get_iv_rank(),
+            'technical': self.dl.get_technical_score(),
+            'greeks': self.dl.get_greeks_analysis(contract),
+            'liquidity': contract['volume']
+        }
+
+    def _iv_analysis_score(self, contract):
+        """波动率指标评分（20%）"""
+        # 获取行业IV数据
+        industry_iv = self.dl.get_industry_iv()
+        iv_rank = self.dl.get_iv_rank()
+        
+        score = 0
+        # 个股IV vs 行业IV
+        if contract['iv'] > industry_iv * 1.2:
+            score += 5
+        # IV历史分位
+        if iv_rank > 70:
+            score += 8
+        elif iv_rank < 30:
+            score -= 5
+        # 期限结构评分
+        if self.dl.iv_term_structure() == 'contango':
+            score += 3
+        return score / 10  # 转换为0-1范围
+
+    def _fundamental_score(self):
+        """公司基本面评分（15%）"""
+        score = 0
+        # 财报窗口检查
+        if self.dl.days_to_earnings() < 15:
+            score -= 8
+        # 内部人交易
+        if self.dl.insider_buying() > 0.001:  # 增持超过0.1%
+            score += 5
+        # 机构持股变动
+        if self.dl.institutional_holding_change() > 0.05:
+            score += 3
+        return score / 10
+
+    def _macro_economic_score(self):
+        """宏观经济评分（15%）"""
+        macro = self.dl.get_macro_factors()
+        score = 0
+        
+        # CPI敏感度
+        if macro['cpi_sensitivity'] > 1.0:
+            score -= 3  # 高敏感度扣分
+        elif macro['cpi_sensitivity'] < 0.8:
+            score += 2
+            
+        # 利率敏感度
+        if abs(macro['rate_sensitivity']) > 0.3:
+            score -= 2
+            
+        # 行业政策风险
+        if macro['sector_policy_risk'] > 0.7:
+            score -= 5
+            
+        return score / 10
+
+    def _technical_score(self):
+        """技术分析评分（12%）"""
+        tech_data = self.dl.get_technical_data()
+        score = 0
+        # 支撑位距离
+        if tech_data['price_to_support'] < 0.03:
+            score += 4
+        # 趋势强度
+        if tech_data['adx'] > 25 and tech_data['+di'] > tech_data['-di']:
+            score += 5
+        # 成交量分析
+        if tech_data['volume_ratio'] < 0.8:
+            score += 3
+        return score / 10
+
+    def _greeks_score(self, contract):
+        """希腊字母评分（12%）"""
+        greeks = self.dl.get_greeks_analysis(contract)
+        score = 0
+        # Theta/Delta比值
+        if greeks['theta'] / abs(greeks['delta']) >= 0.5:
+            score += 6
+        # Gamma风险控制
+        if greeks['gamma'] < 0.08:
+            score += 4
+        # Vega暴露
+        if contract['iv'] > 0.3 and abs(greeks['vega']) < 0.5:
+            score += 2
+        return score / 10
+
+    def _generate_spread_candidates(self, puts):
+        """生成垂直价差候选策略"""
+        spreads = []
+        for i in range(len(puts)):
+            short_put = puts[i]
+            # 寻找行权价低一档的put
+            long_puts = [p for p in puts if p['strike'] < short_put['strike']]
+            if not long_puts:
+                continue
+                
+            long_put = max(long_puts, key=lambda x: x['strike'])
+            spread_score = (self._calculate_strategy_score(short_put) + 
+                          self._calculate_strategy_score(long_put)) / 2
+            spreads.append({
+                'short_strike': short_put['strike'],
+                'long_strike': long_put['strike'],
+                'short_score': self._calculate_strategy_score(short_put),
+                'long_score': self._calculate_strategy_score(long_put),
+                'details': self._get_spread_details(short_put, long_put)
+            })
+        return spreads
+
+    def _get_spread_details(self, short_put, long_put):
+        """获取价差策略明细"""
+        return {
+            'iv_rank': (short_put['iv_rank'] + long_put['iv_rank']) / 2,
+            'technical': self.dl.get_technical_score(),
+            'greeks': {
+                'theta_delta_ratio': (short_put['theta']/abs(short_put['delta']) + 
+                                    long_put['theta']/abs(long_put['delta'])) / 2
+            },
+            'liquidity': min(short_put['volume'], long_put['volume'])
+        }

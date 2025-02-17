@@ -1,0 +1,33 @@
+stages:
+  - test
+  - build
+  - deploy
+
+unit_test:
+  stage: test
+  image: python:3.9
+  script:
+    - pip install -r requirements.txt
+    - pytest tests/ --cov=src --junitxml=report.xml
+  artifacts:
+    reports:
+      junit: report.xml
+
+docker_build:
+  stage: build
+  image: docker:20.10
+  services:
+    - docker:20.10-dind
+  script:
+    - docker build -t registry.example.com/option-system:$CI_COMMIT_SHA .
+    - docker push registry.example.com/option-system:$CI_COMMIT_SHA
+
+deploy_prod:
+  stage: deploy
+  image: hashicorp/terraform:1.1.7
+  only:
+    - main
+  script:
+    - cd deploy/aws
+    - terraform init
+    - terraform apply -auto-approve -var="image_tag=$CI_COMMIT_SHA" 

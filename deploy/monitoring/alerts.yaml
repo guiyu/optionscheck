@@ -1,0 +1,20 @@
+groups:
+- name: trading-alerts
+  rules:
+  - alert: HighSystemLatency
+    expr: system_latency_seconds{quantile="0.95"} > 2
+    for: 5m
+    labels:
+      severity: critical
+    annotations:
+      summary: "系统延迟过高"
+      description: "95th延迟持续超过2秒: {{ $value }}秒"
+      
+  - alert: LowStrategyQuality
+    expr: best_strategy_score < 50
+    for: 1h
+    labels:
+      severity: warning
+    annotations:
+      summary: "策略质量下降"
+      description: "最佳策略得分低于50分: {{ $value }}" 

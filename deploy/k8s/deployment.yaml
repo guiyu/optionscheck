@@ -1,0 +1,39 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: option-system
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: option-system
+  template:
+    metadata:
+      labels:
+        app: option-system
+    spec:
+      containers:
+      - name: main
+        image: registry.example.com/option-system:v1.3
+        ports:
+        - containerPort: 8000
+        envFrom:
+        - configMapRef:
+            name: option-config
+        resources:
+          limits:
+            cpu: "1"
+            memory: "1Gi"
+      - name: monitor
+        image: registry.example.com/option-monitor:v1.1
+        envFrom:
+        - secretRef:
+            name: alert-secrets
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: option-config
+data:
+  LOG_LEVEL: "INFO"
+  POLLING_INTERVAL: "15" 

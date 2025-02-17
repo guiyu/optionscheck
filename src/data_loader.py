@@ -4,6 +4,8 @@ import yaml
 import os
 from datetime import datetime
 import requests
+import yfinance as yf
+import numpy as np
 
 class DataLoader:
     def __init__(self, ticker):
@@ -186,3 +188,68 @@ class DataLoader:
         except Exception as e:
             print(f"财报日历获取失败: {str(e)}")
             return []
+    
+    def get_industry_iv(self):
+        """获取行业平均IV"""
+        # 实现行业数据获取逻辑
+        return self._fetch_industry_data().get('average_iv', 0.3)
+    
+    def days_to_earnings(self):
+        """距离下次财报的天数"""
+        next_earnings = min([d for d in self.get_earnings_dates() if d > datetime.now()])
+        return (next_earnings - datetime.now()).days
+    
+    def get_technical_data(self):
+        """获取技术指标数据"""
+        return {
+            'price_to_support': self._calculate_support_distance(),
+            'adx': self._calculate_adx(),
+            '+di': self._calculate_positive_di(),
+            'volume_ratio': self._volume_ratio()
+        }
+    
+    def _volume_ratio(self):
+        """计算成交量比率"""
+        current_volume = self.get_real_time_data()['Volume'].iloc[-1]
+        avg_volume = self.get_real_time_data()['Volume'].rolling(20).mean().iloc[-1]
+        return current_volume / avg_volume
+
+    def get_sector_data(self):
+        """获取行业相关数据"""
+        return {
+            'sector_iv': self._get_sector_iv(),
+            'competitor_performance': self._get_competitor_data(),
+            'sector_correlation': self._calculate_sector_correlation()
+        }
+
+    def _get_competitor_data(self):
+        """获取竞争对手表现"""
+        # 实现行业竞争对手数据获取
+        competitors = ['AMD', 'INTC'] if self.ticker == 'NVDA' else []
+        return {c: self.__class__(c).get_performance() for c in competitors}
+
+    def get_macro_factors(self):
+        """获取宏观经济因子"""
+        return {
+            'cpi_sensitivity': self._get_cpi_sensitivity(),
+            'rate_sensitivity': self._calculate_rate_beta(),
+            'sector_policy_risk': self._evaluate_policy_risk()
+        }
+    
+    def _get_cpi_sensitivity(self):
+        """CPI敏感度分析"""
+        # 实现行业CPI敏感度模型
+        sector = self._get_sector()
+        sensitivity_map = {
+            'tech': 0.7, 
+            'consumer': 1.2,
+            'energy': 0.9
+        }
+        return sensitivity_map.get(sector, 1.0)
+    
+    def _calculate_rate_beta(self):
+        """利率敏感度分析"""
+        # 计算标的对10年期国债收益率的beta
+        treasury_data = yf.Ticker('^TNX').history(period='1y')
+        stock_returns = self.get_returns()
+        return np.cov(stock_returns, treasury_data['Close'].pct_change().dropna())[0][1]

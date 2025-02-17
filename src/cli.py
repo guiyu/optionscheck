@@ -22,16 +22,23 @@ def main(ticker):
         print("⚠️ 存在近期财报事件风险")
         return
         
-    # 生成信号
-    signal = sg.generate_vertical_spread_signal()
+    # 生成策略
+    top_strategies = sg.generate_top_strategies()
     
-    if signal and rm.check_greeks(signal['greeks']):
-        print("\n🎯 交易信号生成成功")
-        print(f"策略类型: {signal['strategy_type']}")
-        print(f"建议行权价: {signal['strikes']}")
-        print(f"预期胜率: {signal['probability']}%")
-    else:
+    if not top_strategies:
         print("\n❌ 未找到有效交易机会")
+        return
+    
+    print("\n🏆 推荐策略 TOP3:")
+    for i, strategy in enumerate(top_strategies, 1):
+        print(f"\n#{i} {strategy['type'].upper()} [综合胜率: {strategy['score']:.1f}%]")
+        print(f"行权价组合: {strategy.get('strike', strategy.get('strikes'))}")
+        print("📊 关键指标:")
+        print(f"  IV百分位: {strategy['details']['iv_rank']}%")
+        print(f"  技术评分: {strategy['details']['technical']}/15")
+        print(f"  时间价值比: {strategy['details']['greeks']['theta_delta_ratio']:.2f}")
+        print(f"  合约流动性: {strategy['details']['liquidity']}手")
+        print(f"  行业相关性: {dl.get_sector_data()['sector_correlation']:.2f}")
 
 if __name__ == '__main__':
     main()
