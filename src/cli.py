@@ -4,9 +4,8 @@ from src.risk_manager import RiskManager
 import click
 
 @click.command()
-@click.option('--ticker', help='股票代码')
-@click.option('--debug', is_flag=True, help='调试模式')
-def main(ticker, debug):
+@click.option('--ticker', prompt='请输入标的代码', help='例如：QQQ, NVDA')
+def main(ticker):
     """期权交易决策命令行接口"""
     dl = DataLoader(ticker)
     sg = SignalGenerator(dl)
@@ -24,19 +23,15 @@ def main(ticker, debug):
         return
         
     # 生成信号
-    signals = sg.generate_vertical_spread_signal()
+    signal = sg.generate_vertical_spread_signal()
     
-    if signals:
-        print("\n🏆 最佳交易机会排行：")
-        for i, signal in enumerate(signals, 1):
-            print(f"""\n#{i} {signal['name']}
-    💡 策略类型: {signal['strategy_type']}
-    📅 到期日: {signal['expiration']}
-    ⚖️ 行权价范围: {signal['strikes'][0]} - {signal['strikes'][1]}
-    🎯 预期胜率: {signal['probability']}%
-    💰 最大收益: {signal['max_return']}%""")
+    if signal and rm.check_greeks(signal['greeks']):
+        print("\n🎯 交易信号生成成功")
+        print(f"策略类型: {signal['strategy_type']}")
+        print(f"建议行权价: {signal['strikes']}")
+        print(f"预期胜率: {signal['probability']}%")
     else:
-        print("\n⚠️ 未找到符合要求的交易机会")
+        print("\n❌ 未找到有效交易机会")
 
 if __name__ == '__main__':
     main()
