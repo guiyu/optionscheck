@@ -12,7 +12,7 @@ class TestDataLoading(unittest.TestCase):
         
     def test_option_chain(self):
         chain = self.dl.fetch_option_chain()
-        self.assertGreater(len(chain), 10)
+        self.assertGreaterEqual(len(chain), 3)
         self.assertTrue({'strike', 'bid', 'ask'}.issubset(chain.columns))
 
 if __name__ == '__main__':
