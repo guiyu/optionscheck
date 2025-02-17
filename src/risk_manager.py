@@ -25,3 +25,13 @@ class RiskManager:
         """事件风险检查"""
         next_5_days = pd.Timestamp.now() + pd.DateOffset(days=5)
         return any(date <= next_5_days for date in earnings_dates)
+    
+    def calculate_risk_level(self, portfolio_greeks):
+        risk_score = (
+            abs(portfolio_greeks['delta']) * 0.4 +
+            portfolio_greeks['vega'] * 0.3 +
+            abs(portfolio_greeks['theta']) * 0.3
+        )
+        if risk_score < 0.2: return '低'
+        elif risk_score < 0.5: return '中'
+        else: return '高'

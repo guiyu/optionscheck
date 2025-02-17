@@ -134,6 +134,11 @@ class DataLoader:
                     option_chain[col] = pd.to_numeric(option_chain[col], errors='coerce').fillna(0)
                 
                 result = option_chain[required_cols].reset_index(drop=True)
+
+                # 添加IV过滤
+                valid_iv_mask = (option_chain['impliedVolatility'] > 0.2) & (option_chain['impliedVolatility'] < 1.0)
+                option_chain = option_chain[valid_iv_mask]
+                print(f"过滤后有效合约数量: {len(option_chain)}")
                 
                 print(f"\n最终数据信息:")
                 print(f"总行数: {len(result)}")
@@ -141,7 +146,7 @@ class DataLoader:
                 if not result.empty:
                     print(f"样本数据:\n{result.head(1)}")
                 
-                return result
+                return option_chain
                 
             except Exception as e:
                 print(f"处理期权数据失败: {str(e)}")

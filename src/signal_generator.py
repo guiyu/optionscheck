@@ -1,6 +1,7 @@
 from src.utils.volatility import calculate_iv_rank
 from src.utils.greeks import calculate_greeks
 from src.data_loader import DataLoader
+from src.risk_manager import RiskManager
 import pandas as pd
 import numpy as np
 from scipy.stats import norm
@@ -92,11 +93,28 @@ class SignalGenerator:
             
         # 计算概率
         prob = self._calculate_probability(call_strike)
+
+        # 修正行权价选择逻辑
+        call_strikes = option_chain[option_chain['type'] == 'call']['strike'].unique()
+        put_strikes = option_chain[option_chain['type'] == 'put']['strike'].unique()
+
+        # 选择价内Call和价外Call构建价差
+        itm_call = call_strikes[call_strikes < self.spot_price].max()
+        otm_call = call_strikes[call_strikes > self.spot_price].min()
+        
+        risk_level = RiskManager(self.config['strategy']).calculate_risk_level(portfolio_greeks)
+
+        
+        # 验证行权价合理性
+        if itm_call >= otm_call or (otm_call - itm_call) > self.spot_price * 0.1:
+            print("价差不符合要求")
+            return None
         
         return {
-            'ticker': self.dl.ticker,
             'strategy_type': 'bull_call_spread',
-            'strikes': (call_strike, put_strike),
+            'ticker': self.dl.ticker,
+            'strikes': (itm_call, otm_call),
+            'risk_level': risk_level,
             'probability': round(prob * 100, 2),
             'entry_price': self.spot_price,
             'expiration': call_contract['expiration'],
@@ -135,16 +153,18 @@ class SignalGenerator:
         return chain.iloc[closest_idx]['strike']
     
     def _calculate_probability(self, strike):
-        """计算触及概率"""
-        df = self.dl.get_real_time_data()  # 获取数据
-        if df.empty:
-            return 0
-            
-        log_returns = np.log(df['Close']/df['Close'].shift(1)).dropna()
-        mu = log_returns.mean() * 252
-        sigma = log_returns.std() * np.sqrt(252)
+        # 获取真实剩余天数
+        days_to_expire = self.dl.fetch_option_chain().iloc[0]['days_to_expire']
+        t = max(days_to_expire / 365, 0.001)  # 防止除零
         
-        t = 30/365
-        d2 = (np.log(self.spot_price/strike) + 
-             (mu - 0.5*sigma**2)*t) / (sigma*np.sqrt(t))
-        return norm.cdf(d2)
+        # 使用合约的隐含波动率
+        chain = self.dl.fetch_option_chain()
+        iv = chain[chain['strike'] == strike]['impliedVolatility'].iloc[0]
+        
+        # 标的价格获取方式优化
+        df = self.dl.get_real_time_data()
+        spot = df['Close'].iloc[-1] if not df.empty else self.spot_price
+        
+        # 使用Black-Scholes公式计算Delta修正概率
+        d1 = (np.log(spot/strike) + (0.5 * iv**2) * t) / (iv * np.sqrt(t))
+        return norm.cdf(d1)  # 返回真实概率
